@@ -3,6 +3,8 @@
 # =========================
 import time
 import random
+import os
+import json
 from datetime import datetime
 
 import gspread
@@ -17,7 +19,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 URL = "https://shisetsu.city.hachioji.tokyo.jp/reserve/calendar"
 
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1VTG74O1W1EMLvWnCbQt0OJyZLCGKsUdB1MnkceM1T5E/edit"
-
 
 FACILITY_IDS = {
     "子安": 304,
@@ -48,9 +49,6 @@ def get_sheet():
         "https://www.googleapis.com/auth/drive"
     ]
 
-    import os
-    import json
-
     creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 
     creds = ServiceAccountCredentials.from_json_keyfile_dict(
@@ -65,167 +63,155 @@ def get_sheet():
 # 書き込み
 # =========================
 def write_to_sheet(rows):
-    print(f"[LOG] 書き込み {len(rows)}件")
-
     sheet = get_sheet()
     now = time.strftime("%Y-%m-%d %H:%M")
 
     data = [[now, *r] for r in rows]
+
     sheet.append_rows(data)
+    print(f"[WRITE] {len(rows)}件 書き込み完了")
 
 
 # =========================
-# HTML解析（完全対応）
+# HTML解析（予約可すべて）
 # =========================
 def parse(html, name):
     soup = BeautifulSoup(html, "html.parser")
     out = []
 
     for row in soup.find_all("tr"):
-
         th = row.find("th")
-        if not th:
+        tds = row.find_all("td")
+
+        if not th or not tds:
             continue
 
         time_label = th.get_text(strip=True)
 
-        blocks = row.find_all("div", class_="collectReserve")
+        for td in tds:
+            text = td.get_text(" ", strip=True)
 
-        for b in blocks:
-
-            span = b.find("span")
-            if not span:
+            # 予約可のみ
+            if "予約可" not in text:
                 continue
 
-            if "予約可" not in span.get_text():
-                continue
-
-            # hidden情報取得
-            date = b.find("input", class_="js_usage_date")["value"]
-            gid = b.find("input", class_="js_group_id")["value"]
-
-            # 体育室（全面）だけ
-            if not gid.endswith("0100"):
-                continue
+            # 日付取得
+            date = ""
+            hidden = td.find("input", {"class": "js_usage_date"})
+            if hidden:
+                date = hidden.get("value")
 
             kind = "延長" if "延長" in time_label else "通常"
 
-            print(f"[HIT] {name} {date} {time_label} {kind}")
-
-            out.append((
-                date,
-                name,
-                kind,
-                time_label,
-                gid
-            ))
+            out.append((date, name, kind, time_label, text))
 
     return out
 
 
 # =========================
-# 1施設処理
+# 1施設チェック
 # =========================
 def check_one(page, name, fid, today):
-
-    print(f"\n[施設] {name} ({fid})")
-
-    page.goto(URL)
-    time.sleep(2 + random.random())
-
-    try:
-        # ① 施設選択
-        page.wait_for_selector('[name="facility_id"]')
-        page.select_option('[name="facility_id"]', str(fid))
-        print("[STEP] 施設選択")
-
-        time.sleep(1)
-
-        # ② 体育室（全面）
-        place_id = str(fid) + "0100"
-        page.select_option('#place', place_id)
-
-        page.evaluate("""
-        () => {
-            const el = document.querySelector('#place');
-            if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        """)
-        print("[STEP] 体育室（全面）")
-
-        time.sleep(1)
-
-        # ③ 1ヶ月表示（強制）
-        page.evaluate("""
-        () => {
-            const el = document.querySelector('#user-calendar-disp-type-3');
-            if (el) {
-                el.checked = true;
-                el.click();
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-        """)
-        print("[STEP] 1ヶ月表示")
-
-        # ④ 今日の日付
-        page.fill('[name="date"]', today)
-        print(f"[STEP] 日付設定: {today}")
-
-        # ⑤ 検索
-        page.click('input[type="submit"], button[type="submit"]')
-        page.wait_for_load_state("networkidle")
-        page.wait_for_selector("table")
-
-        print("[STEP] 検索完了")
-
-    except Exception as e:
-        print("[ERROR]", e)
-        return []
-
-    html = page.content()
-
-    return parse(html, name)
-
-
-# =========================
-# メイン処理
-# =========================
-def run(page):
-
-    today = datetime.now().strftime("%Y/%m/%d")
-
     print("\n==============================")
-    print(f"[DATE] 今日: {today}")
+    print(f"[施設] {name} ({fid})")
     print("==============================")
 
-    results = []
+    try:
+        # ページ移動（安定化）
+        try:
+            page.goto(URL, timeout=60000)
+        except:
+            print("[WARN] ページ読み込み失敗")
+            return []
 
-    for name, fid in FACILITY_IDS.items():
-        data = check_one(page, name, fid, today)
-        results.extend(data)
+        time.sleep(2 + random.random())
+
+        # 施設選択
+        print("[STEP] 施設選択")
+        page.select_option('[name="facility_id"]', str(fid))
+
+        # 体育室（全面）
+        print("[STEP] 体育室（全面）")
+        group_id = str(fid) + "0100"
+        if page.query_selector('[name="group_id"]'):
+            page.select_option('[name="group_id"]', group_id)
+
+        # 1ヶ月表示
+        print("[STEP] 1ヶ月表示")
+        page.check('input[value="3"]')
+
+        # 日付
+        print(f"[STEP] 日付設定: {today}")
+        page.fill('input[name="date"]', today)
+
+        # 検索ボタン
+        print("[STEP] 検索")
+        try:
+            page.click('button[type="submit"]', timeout=10000)
+        except:
+            print("[WARN] クリック失敗")
+            return []
+
+        # 読み込み待ち（ゆるく）
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except:
+            print("[WARN] 読み込み待ちタイムアウト（続行）")
+
+        time.sleep(2)
+
+        html = page.content()
+
+        results = parse(html, name)
+
+        for r in results:
+            print(f"[HIT] {r[1]} {r[0]} {r[3]} {r[2]}")
 
         print(f"[進捗] {len(results)}件")
-        time.sleep(1)
 
-    if results:
-        write_to_sheet(results)
-        print(f"[保存] {len(results)}件")
+        return results
+
+    except Exception as e:
+        print(f"[ERROR] {name} スキップ:", e)
+        return []
+
+
+# =========================
+# メイン
+# =========================
+def run(page):
+    print("[START] 起動")
+
+    today = datetime.now().strftime("%Y/%m/%d")
+    print(f"[DATE] 今日: {today}")
+
+    all_results = []
+
+    for name, fid in FACILITY_IDS.items():
+        try:
+            data = check_one(page, name, fid, today)
+            all_results.extend(data)
+        except Exception as e:
+            print(f"[ERROR] {name} 完全スキップ:", e)
+
+        time.sleep(2)
+
+    # 保存
+    if all_results:
+        write_to_sheet(all_results)
     else:
-        print("[結果] 空きなし")
+        print("[INFO] 空きなし")
+
+    print("[END] 完了")
 
 
 # =========================
 # 実行
 # =========================
 with sync_playwright() as p:
-    print("[START] 起動")
-
-    browser = p.chromium.launch(headless=True)
+    browser = p.chromium.launch(headless=True)  # ← GitHub用
     page = browser.new_page()
 
     run(page)
 
     browser.close()
-
-    print("[END] 完了")
