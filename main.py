@@ -48,7 +48,7 @@ def get_sheet():
         "https://www.googleapis.com/auth/drive"
     ]
 
-    creds = import os
+import os
 import json
 
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
