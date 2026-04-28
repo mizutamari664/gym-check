@@ -221,7 +221,7 @@ def run(page):
 with sync_playwright() as p:
     print("[START] 起動")
 
-    browser = p.chromium.launch(headless=False)
+    browser = p.chromium.launch(headless=True)
     page = browser.new_page()
 
     run(page)
