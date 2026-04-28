@@ -48,13 +48,13 @@ def get_sheet():
         "https://www.googleapis.com/auth/drive"
     ]
 
-import os
-import json
+    import os
+    import json
 
-creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    creds_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        creds_dict, scope)
 
     client = gspread.authorize(creds)
 
